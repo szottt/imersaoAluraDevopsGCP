@@ -1,0 +1,54 @@
+# File: .github/workflows/pipeline.yaml
+name: 'new to Develop'
+
+on:
+  push:
+    branches: [new/*]
+
+permissions:
+  contents: write
+  pull-requests: write # Esta permissão já está aqui, mas vamos garantir no job também
+
+jobs:
+
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+    - name: Build the Docker image
+      run: docker build . --file Dockerfile --tag my-image-name:$(date +%s)
+
+  create-pull-request:
+    runs-on: ubuntu-latest
+    # Adiciona permissões explicitas para este job
+    permissions:
+      contents: write
+      pull-requests: write
+
+    steps:
+      - name: Copia os arquivos do repo
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0 # Necessário para comparar branches
+
+      # O passo de diagnóstico pode ser útil, vamos mantê-lo por enquanto
+      - name: Check differences before PR action
+        run: |
+          git fetch origin develop
+          git fetch origin ${{ github.ref_name }}
+          echo "Commits in ${{ github.ref_name }} not in develop:"
+          git log origin/develop..origin/${{ github.ref_name }} --oneline
+          echo "Count of commits in ${{ github.ref_name }} not in develop:"
+          git rev-list --right-only --count origin/develop...origin/${{ github.ref_name }}
+
+      # Passo para criar o Pull Request usando GitHub CLI (sem || true)
+      - name: Create Pull Request using GitHub CLI
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh pr create \
+            --base develop \
+            --head ${{ github.ref_name }} \
+            --title "feat: PR from ${{ github.ref_name }}" \
+            --body "Este Pull Request foi criado automaticamente pelo GitHub Actions.\n\nMerge da branch `${{ github.ref_name }}` para `develop`."
