@@ -1,0 +1,92 @@
+# File: .github/workflows/develop-to-staging.yaml
+name: 'Develop to staging Branch and PR from Develop' # Nome do workflow
+
+on:
+  push:
+    branches: [develop] # Dispara no push para develop
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+
+  build:
+
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+    - name: Build the Docker image
+      run: docker build . --file Dockerfile --tag my-image-name:$(date +%s)
+
+  create-staging-branch-and-pr: # Nome do job
+    runs-on: ubuntu-latest
+    environment: Homolog # Associa este job ao ambiente Homolog
+    permissions:
+      contents: write
+      pull-requests: write # Permissões necessárias para criar branch e PR
+
+    steps:
+      - name: Checkout develop branch
+        uses: actions/checkout@v3
+        with:
+          ref: develop # Faz checkout da branch develop para ter o contexto
+          fetch-depth: 0 # Necessário para buscar histórico completo e tags/branches
+
+      - name: Determine next staging version and branch name
+        id: set_version # Define um ID para acessar as saídas deste passo
+        run: |
+          # Busca todas as branches remotas que começam com 'staging-'
+          # O || true evita que o workflow falhe se não houver branches de staging ainda
+          git fetch origin 'refs/heads/staging-*:refs/remotes/origin/staging-*' || true
+
+          # Encontra a última branch de staging pelo nome (ordem alfabética/versão)
+          LATEST_staging_BRANCH=$(git branch -r | grep 'origin/staging-' | sed 's/.*origin\///' | sort -V | tail -n 1)
+
+          if [ -z "$LATEST_staging_BRANCH" ]; then
+            # Se não houver branches de staging, começa com 0.0.1
+            NEXT_VERSION="0.0.1"
+            # Para a primeira staging, a branch base para criar a nova staging será develop
+            BRANCH_BASE_FOR_NEW_staging="develop"
+          else
+            # Extrai o número da versão (ex: 0.0.1 de staging-0.0.1)
+            CURRENT_VERSION=$(echo "$LATEST_staging_BRANCH" | sed 's/staging-//')
+            # Divide a versão em partes (major, minor, patch)
+            MAJOR=$(echo "$CURRENT_VERSION" | cut -d. -f1)
+            MINOR=$(echo "$CURRENT_VERSION" | cut -d. -f2)
+            PATCH=$(echo "$CURRENT_VERSION" | cut -d. -f3)
+            # Incrementa o número do patch
+            NEXT_PATCH=$((PATCH + 1))
+            NEXT_VERSION="$MAJOR.$MINOR.$NEXT_PATCH"
+            # Para stagings subsequentes, a branch base para criar a nova staging será a última branch de staging
+            BRANCH_BASE_FOR_NEW_staging="$LATEST_staging_BRANCH"
+          fi
+
+          NEW_staging_BRANCH="staging-$NEXT_VERSION"
+          echo "Próxima branch de staging será: $NEW_staging_BRANCH"
+          echo "Branch base para criar a nova staging: $BRANCH_BASE_FOR_NEW_staging"
+          # Define variáveis de saída para serem usadas em passos futuros
+          echo "NEW_staging_BRANCH=$NEW_staging_BRANCH" >> $GITHUB_OUTPUT
+          echo "NEXT_VERSION=$NEXT_VERSION" >> $GITHUB_OUTPUT
+          echo "BRANCH_BASE_FOR_NEW_staging=$BRANCH_BASE_FOR_NEW_staging" >> $GITHUB_OUTPUT # Adiciona a branch base para criação
+
+      - name: Create and push new staging branch
+        run: |
+          NEW_staging_BRANCH=${{ steps.set_version.outputs.NEW_staging_BRANCH }}
+          BRANCH_BASE_FOR_NEW_staging=${{ steps.set_version.outputs.BRANCH_BASE_FOR_NEW_staging }} # Recupera a branch base
+
+          echo "Criando branch $NEW_staging_BRANCH a partir de $BRANCH_BASE_FOR_NEW_staging"
+          # Cria a nova branch localmente a partir da branch base determinada
+          git checkout -b $NEW_staging_BRANCH origin/$BRANCH_BASE_FOR_NEW_staging # Cria a partir da referência remota
+          # Envia a nova branch para o repositório remoto
+          git push origin $NEW_staging_BRANCH
+
+      - name: Create Pull Request from develop to new staging branch # Nome do passo
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # Usa o token do GitHub Actions
+        run: |
+          NEW_staging_BRANCH=${{ steps.set_version.outputs.NEW_staging_BRANCH }}
+          NEXT_VERSION=${{ steps.set_version.outputs.NEXT_VERSION }}
+          # Cria o Pull Request usando o GitHub CLI
+          gh pr create --base $NEW_staging_BRANCH --head develop --title "Merge develop into staging v${NEXT_VERSION}" --body "Pull Request para mergear as mudanças de `develop` na branch de staging `${NEW_staging_BRANCH}`."

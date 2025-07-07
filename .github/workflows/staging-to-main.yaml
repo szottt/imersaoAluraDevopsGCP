@@ -1,0 +1,53 @@
+# File: .github/workflows/staging-to-main.yaml
+name: 'staging to Main'
+
+on:
+  push:
+    branches: [staging-*]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+
+  build:
+
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+    - name: Build the Docker image
+      run: docker build . --file Dockerfile --tag my-image-name:$(date +%s)
+
+  create-pull-request:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+
+      - name: Check differences before PR
+        run: |
+          git fetch origin main
+          git fetch origin ${{ github.ref_name }}
+          echo "Commits in ${{ github.ref_name }} not in main:"
+          git log origin/main..origin/${{ github.ref_name }} --oneline
+          echo "Count of commits in ${{ github.ref_name }} not in main:"
+          git rev-list --right-only --count origin/main...origin/${{ github.ref_name }}
+
+      # AQUI está o bloco que você pediu
+      - name: Create Pull Request using GitHub CLI
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh pr create \
+            --base main \
+            --head ${{ github.ref_name }} \
+            --title "staging: PR from ${{ github.ref_name }} to main" \
+            --body "Este Pull Request foi criado automaticamente pelo GitHub Actions.\n\nMerge da branch `${{ github.ref_name }}` para \`main\`."
